@@ -1,0 +1,44 @@
+{
+  "name": "qutedb",
+  "version": "0.0.2",
+  "description": "Very simple and thin IndexedDB wrapper",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "indexeddb",
+    "browser",
+    "database",
+    "fast",
+    "idb",
+    "thin",
+    "Store",
+    "small",
+    "cute",
+    "qute"
+  ],
+  "author": "latenightentropy",
+  "license": "ISC",
+  "devDependencies": {
+    "@msgpack/msgpack": "^3.1.3",
+    "@types/node": "^25.0.3",
+    "@vitest/coverage-v8": "^4.0.16",
+    "fake-indexeddb": "^6.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}
