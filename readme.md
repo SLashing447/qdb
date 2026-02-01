@@ -12,6 +12,12 @@ Some Stats:
 | 50k | ~2.3 s | ~0.38 s |
 | 100k | ~6.6 s | ~0.88 s |
 
+## Install Using npm
+
+```
+npm install qdb
+```
+
 ## Storage
 
 Indexes and primary keys are stored plaintext and any fields that are not index is serialized/deserialized using a user given custom encode/decode function
@@ -28,6 +34,10 @@ interface Codec<Wire> {
 Query is done either by primary key (composite or simple) or index (unique or not). On Query by Index, the primary keys of the matching records are built using `openKeyCursor()` method. And Then records are fetched by their primary Keys.  
 Composite Primary Keys uses Lexicographic search that is Left to Right query order. The difffernet order of operation can easily be applied like `==` , `>`,`>=`,`<=` on the queries by composite PK.  
 **Note : Using Composite primary keys to query is like 10-15% faster than using unique indices, doesnot mean u should resort to using composite PKs always**
+
+## LRU
+
+It uses simple Lru class to maintain cache , 5th arguement of the qdb constructor takes the amount of records that can be stored in its runtime. no dynamic sizing yet , so it according to ur requiement.
 
 ## Usage
 
