@@ -1,44 +1,13 @@
 export type Schema = {
   [storeName: string]: {
-    /**
-     * Primary Keys are Necessary Field
-     *
-     * to identify objects in the db
-     */
     pk: readonly string[] | string;
-    /**
-     * Index/Indices are Optional,
-     * to make query get easier
-     */
     index: readonly string[] | string;
-    /**
-     * Data is Necesasry Field
-     * The Entire Schema of this Store including pk and index
-     * and other fields
-     *
-     * Usage
-     *
-     * ```ts
-     * interface Person {
-     *  name:string;
-     *  age:number;
-     *  ...
-     * }
-     * // then in the data
-     * data : {} as Person;
-     * ```
-     */
     data: Record<string, any>;
     /**
-     * Optional data encoding
-     * It is enabled by default
+     * Optional data encoding , undefined=true by default
      */
     encoding?: boolean;
-    /**
-     * Applies to Primary Key
-     * Optional Auto Increment simple non Compound Primary keys
-     */
-    autoInc?: boolean;
+    // autoInc?: boolean;
   };
 };
 
@@ -59,3 +28,8 @@ export type WhereClause = {
   op: "==" | ">" | ">=" | "<" | "<=";
   value: any;
 };
+
+export type CacheKey<Schema, K extends keyof Schema = keyof Schema> = [
+  storeName: K,
+  key: IDBValidKey
+];

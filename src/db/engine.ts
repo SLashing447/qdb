@@ -1,9 +1,12 @@
 import { LRUCache } from "./lru.js";
-import type { Codec, Schema, WhereClause } from "./types.js";
+import type { CacheKey, Codec, Schema, WhereClause } from "./types.js";
+
+const toArray = (v: readonly string[] | string) =>
+  typeof v === "string" ? [v] : v;
 
 export class Engine<S extends Schema, Wire> {
   private db: IDBDatabase | null = null;
-  private cache: LRUCache<IDBValidKey, any>;
+  private cache: LRUCache<CacheKey<S>, any>;
 
   constructor(
     private dbName: string,
@@ -44,7 +47,7 @@ export class Engine<S extends Schema, Wire> {
 
         for (const [storeName, config] of Object.entries(this.schema)) {
           if (!db.objectStoreNames.contains(storeName)) {
-            const keyPath = Array.isArray(config.pk)
+            let keyPath = Array.isArray(config.pk)
               ? config.pk.length === 1
                 ? config.pk[0]
                 : (config.pk as string[])
@@ -56,26 +59,32 @@ export class Engine<S extends Schema, Wire> {
               );
             }
 
-            let autoIncrement = config.autoInc ?? false;
+            let ainc: boolean = Array.isArray(config.pk)
+              ? config.pk.length === 1 && config.pk[0].startsWith("++")
+              : typeof config.pk === "string" && config.pk.startsWith("++");
 
-            if (autoIncrement === true && Array.isArray(keyPath)) {
-              console.log(keyPath);
-              throw new Error(
-                `[quteDB]: cannot have autoincrement for composite primary key`
-              );
+            if (ainc) {
+              keyPath = this.schema[storeName]?.pk.slice(2);
+              this.schema[storeName]!.pk = keyPath;
             }
 
             const store = db.createObjectStore(storeName, {
               keyPath,
-              autoIncrement,
+              autoIncrement: ainc,
             });
 
-            const indexes =
-              typeof config.index === "string" ? [config.index] : config.index;
+            toArray(config.index).forEach((raw, i) => {
+              const unique = raw.startsWith("--");
+              const index = unique ? raw.slice(2) : raw;
 
-            for (const indexField of indexes) {
-              store.createIndex(indexField, indexField, { unique: false });
-            }
+              const schemaIndex = this.schema[storeName]?.index;
+              if (unique) {
+                if (Array.isArray(schemaIndex)) schemaIndex[i] = index;
+                else this.schema[storeName]!.index = index;
+              }
+
+              store.createIndex(index, index, { unique });
+            });
           }
         }
       };
@@ -117,15 +126,15 @@ export class Engine<S extends Schema, Wire> {
     try {
       const config = this.schema[storeName];
       if (!config) {
-        throw new Error(
-          `[quteDB]: The Store "${
-            storeName as string
-          }" Schema is Not Defined/Corrupted`
-        );
+        throw new Error("[quteDB]: The Store Schema is Not Defined/Corrupted");
       }
+
       if (config.encoding === false) return data;
 
-      const indexedFields = [...new Set([...config.pk, ...config.index])];
+      const indexedFields: string[] = [
+        ...(Array.isArray(config.pk) ? config.pk : [config.pk]),
+        ...(Array.isArray(config.index) ? config.index : [config.index]),
+      ];
 
       const indexed: any = {};
       const dataObj: any = {};
@@ -162,7 +171,10 @@ export class Engine<S extends Schema, Wire> {
       }
       if (config.encoding === false) return data;
 
-      const indexedFields = [...new Set([...config.pk, ...config.index])];
+      const indexedFields: string[] = [
+        ...(Array.isArray(config.pk) ? config.pk : [config.pk]),
+        ...(Array.isArray(config.index) ? config.index : [config.index]),
+      ];
 
       const indexed: any = {};
 
@@ -170,8 +182,6 @@ export class Engine<S extends Schema, Wire> {
       for (const field of indexedFields) {
         indexed[field] = data[field];
       }
-
-      // Decode data blob
 
       const decoded = this.codec.decode(data.data);
       const normalized = this.normalizeUint8Arrays(decoded);
@@ -186,6 +196,8 @@ export class Engine<S extends Schema, Wire> {
     if (!this.db) throw new Error("[quteDB]: Database not opened");
 
     const storageData = this.encode(storeName, userData);
+
+    // console.log("Storagedata : ", storageData, "\nusdata :  ", userData);
 
     return new Promise((resolve, reject) => {
       const tx = this.db!.transaction(storeName as string, "readwrite");
@@ -224,7 +236,7 @@ export class Engine<S extends Schema, Wire> {
     const misses: IDBValidKey[] = [];
 
     for (const k of keys) {
-      const v = this.cache.get(k);
+      const v = this.cache.get([storeName, k]);
       if (v !== undefined) results.set(k, v);
       else misses.push(k);
     }
@@ -242,7 +254,7 @@ export class Engine<S extends Schema, Wire> {
                 if (r.result !== undefined) {
                   let res = this.decode(storeName, r.result);
 
-                  this.cache.set(k, res);
+                  this.cache.set([storeName, k], res);
                   results.set(k, res);
                 }
                 resolve();
@@ -272,12 +284,23 @@ export class Engine<S extends Schema, Wire> {
     const direction: IDBCursorDirection = orderDir === "desc" ? "prev" : "next";
 
     // ─────────────────────────────────────────────
-    // 1. Decide ordering source (PK or index)
+    // PK metadata
+    // ─────────────────────────────────────────────
+    const pkPath = Array.isArray(store.keyPath)
+      ? store.keyPath
+      : typeof store.keyPath === "string"
+      ? [store.keyPath]
+      : null;
+
+    const isPKField = (f: string) => pkPath?.includes(f) ?? false;
+
+    // ─────────────────────────────────────────────
+    // ORDER BY source
     // ─────────────────────────────────────────────
     let orderingSource: IDBObjectStore | IDBIndex = store;
 
     if (orderField) {
-      const isPK = store.keyPath === orderField;
+      const isPK = isPKField(orderField);
       const isIndex = store.indexNames.contains(orderField);
 
       if (!isPK && !isIndex) {
@@ -286,26 +309,58 @@ export class Engine<S extends Schema, Wire> {
         );
       }
 
+      // composite PK ordering only allowed on first field
+      if (isPK && pkPath!.length > 1 && pkPath![0] !== orderField) {
+        throw new Error(
+          `[quteDB]: ORDER BY "${orderField}" must be first field of composite PK`
+        );
+      }
+
       orderingSource = isPK ? store : store.index(orderField);
     }
 
     // ─────────────────────────────────────────────
-    // 2. Build sets for non-ordering WHERE clauses
+    // WHERE planning
     // ─────────────────────────────────────────────
-    const filterSets: Set<IDBValidKey>[] = [];
+    const pkWheres: WhereClause[] = [];
+    const indexWheres: WhereClause[] = [];
 
     for (const w of wheres) {
-      // skip where that matches ordering field (handled by cursor)
+      if (isPKField(w.field)) {
+        pkWheres.push(w);
+      } else {
+        indexWheres.push(w);
+      }
+    }
+
+    const filterSets: Set<IDBValidKey>[] = [];
+
+    // ─────────────────────────────────────────────
+    // PK scan (single OR composite)
+    // ─────────────────────────────────────────────
+    if (pkPath && pkWheres.length > 0) {
+      const isCompositePK = pkPath.length > 1;
+      const range = buildCompositePKRange(pkPath, pkWheres, isCompositePK);
+      if (range) {
+        const keys = await scanKeys(store, range);
+        filterSets.push(new Set(keys));
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // Index scans
+    // ─────────────────────────────────────────────
+    for (const w of indexWheres) {
       if (w.field === orderField) continue;
 
-      const isPK = store.keyPath === w.field;
       const isIndex = store.indexNames.contains(w.field);
 
-      if (!isPK && !isIndex) {
+      if (!isIndex) {
         throw new Error(`[quteDB]: Field ${w.field} not indexed`);
       }
 
-      const source = isPK ? store : store.index(w.field);
+      const source = store.index(w.field);
+
       const range =
         w.op === "=="
           ? IDBKeyRange.only(w.value)
@@ -322,34 +377,46 @@ export class Engine<S extends Schema, Wire> {
     }
 
     // ─────────────────────────────────────────────
-    // 3. Walk ordering cursor + apply intersection
-    //    + offset + limit INSIDE cursor
+    // Walk ordering cursor + intersect
     // ─────────────────────────────────────────────
     const results: IDBValidKey[] = [];
     let skipped = 0;
+
+    // Helper to normalize keys for comparison
+    // For composite keys with primitives only
+    const normalizeKey = (key: IDBValidKey): string => {
+      if (Array.isArray(key)) {
+        return key.join("\x00"); // Use null byte separator
+      }
+      return String(key);
+    };
+
+    // Convert filterSets to use serialized keys
+    const normalizedFilterSets = filterSets.map(
+      (set) => new Set(Array.from(set).map(normalizeKey))
+    );
+
+    console.log(normalizedFilterSets);
 
     return new Promise((resolve, reject) => {
       const req = orderingSource.openKeyCursor(null, direction);
 
       req.onsuccess = () => {
         const cursor = req.result as IDBCursor | null;
-        if (!cursor) {
-          resolve(results);
-          return;
-        }
+        if (!cursor) return resolve(results);
 
         const pk =
           cursor.primaryKey !== undefined ? cursor.primaryKey : cursor.key;
+        const normalizedPK = normalizeKey(pk);
 
-        // AND semantics: must exist in all filter sets
-        for (const set of filterSets) {
-          if (!set.has(pk)) {
+        // Check against normalized sets
+        for (const set of normalizedFilterSets) {
+          if (!set.has(normalizedPK)) {
             cursor.continue();
             return;
           }
         }
 
-        // offset
         if (skipped < offset) {
           skipped++;
           cursor.continue();
@@ -358,7 +425,6 @@ export class Engine<S extends Schema, Wire> {
 
         results.push(pk);
 
-        // limit
         if (limit !== undefined && results.length >= limit) {
           resolve(results);
           return;
@@ -376,6 +442,7 @@ export class Engine<S extends Schema, Wire> {
     this.db?.close();
   }
 }
+
 async function scanKeys(
   source: IDBObjectStore | IDBIndex,
   range: IDBKeyRange | null
@@ -384,16 +451,157 @@ async function scanKeys(
     const keys: IDBValidKey[] = [];
     const req = source.openKeyCursor(range);
 
+    // console.log("scanKeys - source:", source.name);
+    // console.log("scanKeys - range:", range);
+
     req.onsuccess = () => {
       const c = req.result as IDBCursor | null;
-      if (!c) return resolve(keys);
+
+      // console.log("scanKeys - cursor:", c);
+      // console.log("scanKeys - cursor.key:", c?.key);
+      // console.log("scanKeys - cursor.primaryKey:", c?.primaryKey);
+
+      if (!c) {
+        // console.log("scanKeys - DONE, found keys:", keys);
+        return resolve(keys);
+      }
 
       const pk = c.primaryKey !== undefined ? c.primaryKey : c.key;
-
       keys.push(pk);
       c.continue();
     };
 
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      // console.log("scanKeys - ERROR:", req.error);
+      reject(req.error);
+    };
   });
+}
+
+function buildCompositePKRange(
+  pkPath: string[],
+  wheres: WhereClause[],
+  isCompositePK: boolean
+): IDBKeyRange | null {
+  if (wheres.length === 0) return null;
+
+  const fieldToWhere = new Map(wheres.map((w) => [w.field, w]));
+
+  const prefix: any[] = [];
+  let rangeOp: { op: WhereClause["op"]; value: any } | null = null;
+
+  for (let i = 0; i < pkPath.length; i++) {
+    const field = pkPath[i];
+    if (!field) continue;
+
+    const w = fieldToWhere.get(field);
+
+    if (!w) {
+      break;
+    }
+
+    if (w.op === "==") {
+      prefix.push(w.value);
+    } else {
+      const pkPathAtiP1 = pkPath[i + 1];
+      if (typeof pkPathAtiP1 === "string") {
+        if (i < pkPath.length - 1 && fieldToWhere.has(pkPathAtiP1)) {
+          throw new Error(
+            `[quteDB]: Composite PK range query on "${field}" cannot have conditions on later components`
+          );
+        }
+      }
+      rangeOp = { op: w.op, value: w.value };
+      break;
+    }
+  }
+
+  if (isCompositePK) {
+    for (let i = 0; i < pkPath.length; i++) {
+      const pkPathAti = pkPath[i];
+      if (pkPathAti) {
+        const hasWhere = fieldToWhere.has(pkPathAti);
+        const prefixEnded = i >= prefix.length && !rangeOp;
+
+        if (hasWhere && prefixEnded) {
+          throw new Error(
+            `[quteDB]: Composite PK WHERE clauses must be contiguous. Cannot query "${
+              pkPath[i]
+            }" without "${pkPath[i - 1]}"`
+          );
+        }
+      }
+    }
+  }
+
+  if (prefix.length === 0 && !rangeOp) return null;
+
+  // console.log("DEBUG prefix:", prefix);
+  // console.log("DEBUG rangeOp:", rangeOp);
+  // console.log("DEBUG isCompositePK:", isCompositePK);
+  // console.log("DEBUG pkPath.length:", pkPath.length);
+  // console.log("DEBUG prefix.length:", prefix.length);
+
+  if (rangeOp) {
+    const { op, value } = rangeOp;
+
+    if (isCompositePK) {
+      if (op === ">") {
+        return IDBKeyRange.bound(
+          [...prefix, value, []],
+          [...prefix, []],
+          false,
+          false
+        );
+      } else if (op === ">=") {
+        return IDBKeyRange.bound(
+          [...prefix, value],
+          [...prefix, []],
+          false,
+          false
+        );
+      } else if (op === "<") {
+        return IDBKeyRange.bound(
+          prefix.length > 0 ? prefix : [],
+          [...prefix, value],
+          false,
+          true
+        );
+      } else if (op === "<=") {
+        return IDBKeyRange.bound(
+          prefix.length > 0 ? prefix : [],
+          [...prefix, value, []],
+          false,
+          false
+        );
+      }
+    } else {
+      if (op === ">") {
+        return IDBKeyRange.lowerBound(value, true);
+      } else if (op === ">=") {
+        return IDBKeyRange.lowerBound(value, false);
+      } else if (op === "<") {
+        return IDBKeyRange.upperBound(value, true);
+      } else if (op === "<=") {
+        return IDBKeyRange.upperBound(value, false);
+      }
+    }
+  }
+
+  // Pure equality
+  if (isCompositePK) {
+    const hasAllComponents = prefix.length === pkPath.length;
+
+    // console.log("DEBUG hasAllComponents:", hasAllComponents);
+
+    if (hasAllComponents) {
+      // console.log("DEBUG: Creating IDBKeyRange.only() for:", prefix);
+      return IDBKeyRange.only(prefix);
+    } else {
+      // console.log("DEBUG: Creating prefix bound for:", prefix);
+      return IDBKeyRange.bound(prefix, [...prefix, []], false, false);
+    }
+  } else {
+    return IDBKeyRange.only(prefix[0]);
+  }
 }

@@ -17,6 +17,9 @@ class QueryBuilder<S, K extends keyof S> {
 
   /**
    * Query by indexed fields and primary keys
+   * Composite primary keys are lexicographically searched
+   * Having composite primary keys are 10-15% faster than
+   * unique indexes
    */
   where(field: string, op: "==" | ">" | ">=" | "<" | "<=", value: any): this {
     this._where.push({ field, op, value });
@@ -61,6 +64,8 @@ class QueryBuilder<S, K extends keyof S> {
 
   protected async executeQuery(): Promise<any[]> {
     // 1. ask engine for keys
+    console.log(this._where);
+
     const keys = await this.engine.getKeysByIndexes(
       this.storeName,
       this._where,
@@ -70,7 +75,7 @@ class QueryBuilder<S, K extends keyof S> {
       this.offsetVal
     );
 
-    // console.log("pk are : ", keys);
+    console.log("pk are : ", keys);
 
     if (this.keysOnly) {
       return keys;

@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "dev": "vite",
     "test": "vitest"
   },
   "type": "module",
