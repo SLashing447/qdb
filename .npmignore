@@ -1,0 +1,6 @@
+src/
+tests/
+scripts/
+*.log
+.env
+*.test.*

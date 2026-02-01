@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import "fake-indexeddb/auto";
-import qdb from "./qdb"; // Adjust path
+import qdb from "../src/db/qdb"; // Adjust path
 
 describe("QDB - Composite Primary Key Tests", () => {
   const schema = {
