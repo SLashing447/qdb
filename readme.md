@@ -2,7 +2,7 @@
 
 ### Very Simple and thin and Ergonomic IDB wrapper
 
-- Make ur life easier duh and its super thin 
+- Make ur life easier duh and its super thin
 - 0 extra dependencies
 - it just works predictable and explicit
 
@@ -12,9 +12,24 @@ Some Stats:
 | 50k | ~2.3 s | ~0.38 s |
 | 100k | ~6.6 s | ~0.88 s |
 
-### Storage
+## Storage
 
-Indexes and primary keys are stored plaintext and any fields that are not index is mushed into a object then serialized/deserialized using a user given custom encode/decode function
+Indexes and primary keys are stored plaintext and any fields that are not index is serialized/deserialized using a user given custom encode/decode function
+
+```ts
+interface Codec<Wire> {
+  encode(data: unknown): Wire;
+  decode(data: Wire): unknown;
+}
+```
+
+## Query Logic
+
+Query is done either by primary key (composite or simple) or index (unique or not). On Query by Index, the primary keys of the matching records are built using `openKeyCursor()` method. And Then records are fetched by their primary Keys.  
+Composite Primary Keys uses Lexicographic search that is Left to Right query order. The difffernet order of operation can easily be applied like `==` , `>`,`>=`,`<=` on the queries by composite PK.  
+**Note : Using Composite primary keys to query is like 10-15% faster than using unique indices, doesnot mean u should resort to using composite PKs always**
+
+## Usage
 
 ### Declare Your Database
 
@@ -34,12 +49,14 @@ interface Employee {
 
 const schema = {
   Employees: {
-    pk: ["name","id"],
-    index:["age","office"],
+    pk: ["name","++id"], // "++" ensures id increments
+    index:["age","--office"], // "--" ensures office is unqiue
     data: {} as Employee & {
         // u can add extra fields not in ur interface
         years:number;
-    }
+    },
+    encoding:false, // encoding is true by default
+
   },
 } as const;
 
@@ -78,21 +95,28 @@ await mydb.put("Employees", {
 supported operations
 `==  >  >=  <  <=`  
 the `where` clause can only be used with
-primary keys and indexes
+primary keys (composite or simple) and indexes  
+Primay Keys uses Lexicographic Order for query
+if `pk:[id,name,age]` then u must maintain left-> right order
+`[1,"John" , undefined]` ✅ but `[1,undefined,32]` ❌
+and so on
 
 ```ts
-mydb
+await mydb
   .query("Employees")
   .where("office", "==", "HQ")
   .where("age", ">=", 25)
   .asc("age")
   .limit(20)
   .all();
+
+// use composite primary key fetch all records with same name
+await mydb.query("Employees").where("name", "==", "John Doe").all();
 ```
 
 ### 3. Update/Remove
 
-and similar operations for `update` and `remove`
+and similar operations for `update` and `remove`. ends with `.exec()`
 
 ```ts
 // update

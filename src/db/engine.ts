@@ -319,9 +319,7 @@ export class Engine<S extends Schema, Wire> {
       orderingSource = isPK ? store : store.index(orderField);
     }
 
-    // ─────────────────────────────────────────────
     // WHERE planning
-    // ─────────────────────────────────────────────
     const pkWheres: WhereClause[] = [];
     const indexWheres: WhereClause[] = [];
 
@@ -335,9 +333,7 @@ export class Engine<S extends Schema, Wire> {
 
     const filterSets: Set<IDBValidKey>[] = [];
 
-    // ─────────────────────────────────────────────
     // PK scan (single OR composite)
-    // ─────────────────────────────────────────────
     if (pkPath && pkWheres.length > 0) {
       const isCompositePK = pkPath.length > 1;
       const range = buildCompositePKRange(pkPath, pkWheres, isCompositePK);
@@ -347,9 +343,7 @@ export class Engine<S extends Schema, Wire> {
       }
     }
 
-    // ─────────────────────────────────────────────
     // Index scans
-    // ─────────────────────────────────────────────
     for (const w of indexWheres) {
       if (w.field === orderField) continue;
 
@@ -376,9 +370,7 @@ export class Engine<S extends Schema, Wire> {
       filterSets.push(new Set(keys));
     }
 
-    // ─────────────────────────────────────────────
     // Walk ordering cursor + intersect
-    // ─────────────────────────────────────────────
     const results: IDBValidKey[] = [];
     let skipped = 0;
 
